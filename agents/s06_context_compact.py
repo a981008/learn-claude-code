@@ -56,7 +56,7 @@ SYSTEM = f"You are a coding agent at {WORKDIR}. Use tools to solve tasks."
 
 THRESHOLD = 50000
 TRANSCRIPT_DIR = WORKDIR / ".transcripts"
-KEEP_RECENT = 3
+KEEP_RECENT = 1
 PRESERVE_RESULT_TOOLS = {"read_file"}
 
 
@@ -65,9 +65,39 @@ def estimate_tokens(messages: list) -> int:
     return len(str(messages)) // 4
 
 
+"""
+压缩条件：
+1. 前 KEEP_RECENT 条
+2. len(content) > 100
+3. tool_name 不在 PRESERVE_RESULT_TOOLS
+压缩前：
+{
+    "role": "user",
+    "content": [
+        {
+            "type": "tool_result",
+            "tool_use_id": "u2",
+            "content": "Traceback line1\nTraceback line2\nTraceback line3\n... very long log over 100 chars ..."
+        }
+    ]
+}
+压缩后：
+{
+    "role": "user",
+    "content": [
+        {
+            "type": "tool_result",
+            "tool_use_id": "u2",
+            "content": "[Previous: used bash]"
+        }
+    ]
+}
+"""
 # -- Layer 1: micro_compact - replace old tool results with placeholders --
 def micro_compact(messages: list) -> list:
     # Collect (msg_index, part_index, tool_result_dict) for all tool_result entries
+    print(f"micro_compact 压缩前：{messages}")
+    
     tool_results = []
     for msg_idx, msg in enumerate(messages):
         if msg["role"] == "user" and isinstance(msg.get("content"), list):
@@ -96,6 +126,7 @@ def micro_compact(messages: list) -> list:
         if tool_name in PRESERVE_RESULT_TOOLS:
             continue
         result["content"] = f"[Previous: used {tool_name}]"
+    print(f"micro_compact 压缩后：{messages}")
     return messages
 
 

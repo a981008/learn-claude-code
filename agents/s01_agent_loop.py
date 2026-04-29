@@ -51,15 +51,17 @@ MODEL = os.environ["MODEL_ID"]
 
 SYSTEM = f"You are a coding agent at {os.getcwd()}. Use bash to solve tasks. Act, don't explain."
 
-TOOLS = [{
-    "name": "bash",
-    "description": "Run a shell command.",
-    "input_schema": {
+from anthropic.types import ToolParam
+
+TOOLS = [ToolParam(
+    name="bash",
+    description="Run a shell command.",
+    input_schema={
         "type": "object",
         "properties": {"command": {"type": "string"}},
         "required": ["command"],
     },
-}]
+)]
 
 
 def run_bash(command: str) -> str:
@@ -80,6 +82,7 @@ def run_bash(command: str) -> str:
 # -- The core pattern: a while loop that calls tools until the model stops --
 def agent_loop(messages: list):
     while True:
+        print(messages)
         response = client.messages.create(
             model=MODEL, system=SYSTEM, messages=messages,
             tools=TOOLS, max_tokens=8000,
@@ -93,8 +96,9 @@ def agent_loop(messages: list):
         results = []
         for block in response.content:
             if block.type == "tool_use":
-                print(f"\033[33m$ {block.input['command']}\033[0m")
-                output = run_bash(block.input["command"])
+                command = str(block.input["command"]);
+                print(f"\033[33m$ {command}\033[0m")
+                output = run_bash(command)
                 print(output[:200])
                 results.append({"type": "tool_result", "tool_use_id": block.id,
                                 "content": output})
@@ -105,6 +109,7 @@ if __name__ == "__main__":
     history = []
     while True:
         try:
+            # 获取用户输入
             query = input("\033[36ms01 >> \033[0m")
         except (EOFError, KeyboardInterrupt):
             break

@@ -1,7 +1,12 @@
 #!/usr/bin/env python3
 # Harness: planning -- keeping the model on course without scripting the route.
 """
-s03_todo_write.py - TodoWrite
+s03_todo_write.py - TodoWrite with full trace visibility
+
+增强点：
+- 👀 可视化 LLM thinking / tool call / tool result
+- 🧾 清晰展示 messages 流转
+- 🔍 调试 agent 执行全过程
 
 The model tracks its own progress via a TodoManager. A nag reminder
 forces it to keep updating when it forgets.
@@ -31,6 +36,16 @@ import os
 import subprocess
 from pathlib import Path
 
+try:
+    import readline
+    readline.parse_and_bind('set bind-tty-special-chars off')
+    readline.parse_and_bind('set input-meta on')
+    readline.parse_and_bind('set output-meta on')
+    readline.parse_and_bind('set convert-meta off')
+    readline.parse_and_bind('set enable-meta-keybindings on')
+except ImportError:
+    pass
+
 from anthropic import Anthropic
 from dotenv import load_dotenv
 
@@ -46,6 +61,14 @@ MODEL = os.environ["MODEL_ID"]
 SYSTEM = f"""You are a coding agent at {WORKDIR}.
 Use the todo tool to plan multi-step tasks. Mark in_progress before starting, completed when done.
 Prefer tools over prose."""
+
+
+# =========================
+# 👀 DEBUG 工具
+# =========================
+def debug(title: str, content):
+    print("\n" + "=" * 20 + f" {title} " + "=" * 20)
+    print(content)
 
 
 # -- TodoManager: structured state the LLM writes to --
@@ -108,7 +131,9 @@ def run_bash(command: str) -> str:
     except subprocess.TimeoutExpired:
         return "Error: Timeout (120s)"
 
-def run_read(path: str, limit: int = None) -> str:
+from typing import Optional
+
+def run_read(path: str, limit: Optional[int] = None) -> str:
     try:
         lines = safe_path(path).read_text().splitlines()
         if limit and limit < len(lines):
@@ -145,8 +170,8 @@ TOOL_HANDLERS = {
     "edit_file":  lambda **kw: run_edit(kw["path"], kw["old_text"], kw["new_text"]),
     "todo":       lambda **kw: TODO.update(kw["items"]),
 }
-
-TOOLS = [
+from anthropic.types import ToolParam 
+TOOLS:list[ToolParam] = [
     {"name": "bash", "description": "Run a shell command.",
      "input_schema": {"type": "object", "properties": {"command": {"type": "string"}}, "required": ["command"]}},
     {"name": "read_file", "description": "Read file contents.",
@@ -169,20 +194,32 @@ def agent_loop(messages: list):
             model=MODEL, system=SYSTEM, messages=messages,
             tools=TOOLS, max_tokens=8000,
         )
+        debug("LLM OUTPUT", response.content)
         messages.append({"role": "assistant", "content": response.content})
+
         if response.stop_reason != "tool_use":
             return
+
         results = []
         used_todo = False
+
         for block in response.content:
+
+            # 🧠 thinking
+            if block.type == "thinking":
+                debug("THINKING", block.thinking)
+
+            # 🔧 tool call
             if block.type == "tool_use":
+                debug("TOOL CALL", f"{block.name}({block.input})")
+
                 handler = TOOL_HANDLERS.get(block.name)
                 try:
                     output = handler(**block.input) if handler else f"Unknown tool: {block.name}"
                 except Exception as e:
                     output = f"Error: {e}"
-                print(f"> {block.name}:")
-                print(str(output)[:200])
+
+                debug("TOOL RESULT", output)
                 results.append({"type": "tool_result", "tool_use_id": block.id, "content": str(output)})
                 if block.name == "todo":
                     used_todo = True
@@ -201,11 +238,13 @@ if __name__ == "__main__":
             break
         if query.strip().lower() in ("q", "exit", ""):
             break
+        debug("USER INPUT", query)
         history.append({"role": "user", "content": query})
         agent_loop(history)
         response_content = history[-1]["content"]
+        debug("FINAL ASSISTANT", response_content)
         if isinstance(response_content, list):
             for block in response_content:
                 if hasattr(block, "text"):
-                    print(block.text)
+                    print(f"\033[32massistant >> {block.text}\033[0m")
         print()
